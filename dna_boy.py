@@ -1,15 +1,24 @@
 from pyboy import PyBoy
-from pyboy.utils import WindowEvent
+import warnings
+
+warnings.filterwarnings('ignore')
+
 
 class DNABoy(PyBoy):
     
-    def __init__(self, ROM_PATH:str):
-        super().__init__(ROM_PATH)
+    def __init__(self, ROM_PATH:str, SAVE_STATE_PATH:str|None=None, headless:bool = False):
+        if headless is False:
+            super().__init__(ROM_PATH)
+        else:
+            super().__init__(ROM_PATH, window = "null")
+        
+        if SAVE_STATE_PATH is not None:
+            self.load_state(SAVE_STATE_PATH)
+            
         self.n_moves = 0
         
-        
     
-    def execute_str(self, dna_seq:str, move_map:dict, n_steps:int | None = None) -> None:
+    def execute_str(self, dna_seq:str, move_map:dict, n_steps:int | None = None, record_frames:bool = False, print_steps:bool = True) -> None:
         """
         Method to execute string of moves based on mapping
 
@@ -17,6 +26,9 @@ class DNABoy(PyBoy):
             move_str (str): string of moves to execute
         """
         
+        if record_frames:
+            frames = []
+            
         codon_list = [dna_seq[i:i+3].strip().upper() for i in range(0, len(dna_seq), 3)]
         for codon in codon_list:
             if n_steps is not None and self.n_moves >= n_steps:
@@ -24,11 +36,22 @@ class DNABoy(PyBoy):
             action = move_map[codon]
             if action:
                 self.n_moves += 1
-                print(f"move {self.n_moves}: {codon}")
+                
+                if print_steps is True:
+                    print(f"move {self.n_moves}: {codon}")
+                    
                 action()
+                
+                if record_frames:
+                    frame =self.screen.image.copy()
+                    frames.append(frame)
+                                
             else:
                 pass
             
+        if record_frames:
+            return frames
+                        
     
     def _tap(self, action_start, action_end, wait:int=150):
         self.send_input(action_start)
@@ -50,18 +73,15 @@ class DNABoy(PyBoy):
 
 def main():    
     ROM_PATH = '/home/zac/Desktop/uchicago/science_computing/final_project/pokemon_red.gb'
-    # name character
-    move_str = 'WWSWSAWAAAAAAAAAAAAAAAARRRADRALLLLUADDDDRRRRRRRRAW'
-    
-    # name rival
-    move_str_1 = 'AAAAAAARRRRRRRRDALLLLALLLLUADDDDRRRRRRRRAAAAAAAAAAAAAAWW'
     
     dna_boy = DNABoy(ROM_PATH)
-    dna_boy.execute_str(move_str)
-    dna_boy.execute_str(move_str_1)
+    with open('/home/zac/Desktop/uchicago/science_computing/final_project/game_start.state', 'rb') as game_state:
+        dna_boy.load_state(game_state)
+        
     while dna_boy.tick():
         dna_boy.tick()
-    
+
+
     
     
 if __name__ == '__main__':
