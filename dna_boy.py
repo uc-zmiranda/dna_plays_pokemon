@@ -33,27 +33,34 @@ class DNABoy(PyBoy):
         for codon in codon_list:
             if n_steps is not None and self.n_moves >= n_steps:
                 break
-            action = move_map[codon]
-            if action:
-                self.n_moves += 1
-                
-                if print_steps is True:
-                    print(f"move {self.n_moves}: {codon}")
+            
+            if codon in move_map.keys():
+                action = move_map[codon]
+                if action:
+                    self.n_moves += 1
                     
-                action()
-                
-                if record_frames:
-                    frame =self.screen.image.copy()
-                    frames.append(frame)
-                                
+                    if print_steps is True:
+                        print(f"move {self.n_moves}: {codon}")
+                        
+                    action()
+                    
+                    if record_frames:
+                        frame =self.screen.image.copy()
+                        frames.append(frame)
+                else:
+                    continue                                
             else:
-                pass
+                continue
             
         if record_frames:
             return frames
                         
     
     def _tap(self, action_start, action_end, wait:int=150):
+        self.send_input(action_start)
+        self.tick()
+        self.send_input(action_end)
+        self.tick()
         self.send_input(action_start)
         self.tick()
         self.send_input(action_end)
@@ -80,6 +87,11 @@ def main():
         
     while dna_boy.tick():
         dna_boy.tick()
+        
+    with open('/home/zac/Desktop/uchicago/science_computing/final_project/game_start.state', 'wb') as game_state:
+        dna_boy.save_state(game_state)
+        
+    
 
 
     

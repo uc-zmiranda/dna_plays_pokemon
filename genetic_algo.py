@@ -4,6 +4,10 @@ import itertools as it
 import random
 from pyboy.utils import WindowEvent
 from tqdm import tqdm
+from PIL import Image
+import numpy as np
+import imageio.v2 as imageio
+import math
 
 
 
@@ -31,9 +35,6 @@ class GeneticAlgo(DNABoy):
                 results.append(res)
             
         results.sort(key = lambda x: x[1], reverse = True)
-        
-        for i, fit in enumerate(results):
-            print(f"controller {i}: fitness = {fit}")
             
         return results
     
@@ -42,13 +43,14 @@ class GeneticAlgo(DNABoy):
         
         frames = []
         boy = DNABoy(self.ROM_PATH, headless = headless)
+        GeneticAlgo._load_start_state(boy)
         ctrl_dict = self._make_cfg_dict(ctrl_cfg, boy)
         x0, y0 = self._get_location(boy)
         
         if record_frames:
-            frames = boy.execute_str(dna_seq, ctrl_dict, n_steps, True)
+            frames = boy.execute_str(dna_seq, ctrl_dict, n_steps, True, False)
         else:
-            boy.execute_str(codon_list, ctrl_dict, n_steps)
+            boy.execute_str(dna_seq, ctrl_dict, n_steps)
         
         x1, y1 = self._get_location(boy)
         fitness = (x1-x0, y1-y0)
@@ -59,6 +61,7 @@ class GeneticAlgo(DNABoy):
     def viz_best_n_cfgs(self, results:list, n:int, dna_str:str, n_steps:int, out_path:str):
         
         all_frames = self._record_top_n_runs(n, results, dna_str, n_steps, True)
+        rows, cols = self._calc_grid_shape(n)
         
         # Normalize sequence lengths
         max_len = max(len(seq) for seq in all_frames)
@@ -75,7 +78,7 @@ class GeneticAlgo(DNABoy):
         for t in range(max_len):
             grid_img = Image.new("RGB", (cols * cell_w, rows * cell_h))
 
-            for idx, seq in enumerate(frame_sequences):
+            for idx, seq in enumerate(all_frames):
                 r = idx // cols
                 c = idx % cols
                 frame = seq[t]
@@ -88,7 +91,7 @@ class GeneticAlgo(DNABoy):
             out_path,
             save_all=True,
             append_images=grid_frames[1:],
-            duration=100,
+            duration=200,
             loop=0
         )
         
@@ -96,7 +99,7 @@ class GeneticAlgo(DNABoy):
     
     def _record_top_n_runs(self, n:int, results:list, dna_str:str, n_steps:int, headless = True):
         
-        top_i = [idx for idx, _ in results[:k]]
+        top_i = [idx for idx, _ in results[:n]]
         top_cfgs = [self.cfgs[i] for i in top_i]
 
         all_frames = []
@@ -117,7 +120,7 @@ class GeneticAlgo(DNABoy):
         
         boy = DNABoy(self.ROM_PATH, headless=headless)
         GeneticAlgo._load_start_state(boy)
-        frames = self.find_fitness(cfg, dna_str, n_steps, True, True)
+        _, _, frames = self.find_fitness(cfg, dna_str, n_steps, True, True)
 
         return frames
             
@@ -129,7 +132,7 @@ class GeneticAlgo(DNABoy):
         GeneticAlgo._load_start_state(boy)
         ctrl_dict = GeneticAlgo._make_cfg_dict(cfg, boy)
         x0, y0 = GeneticAlgo._get_location(boy)
-        boy.execute_str(dna_str, ctrl_dict, n_steps, False)
+        boy.execute_str(dna_str, ctrl_dict, n_steps, False, False)
         x1, y1 = GeneticAlgo._get_location(boy)
         fitness = (x1 - x0, y1 - y0)
         
@@ -182,18 +185,73 @@ class GeneticAlgo(DNABoy):
     def _load_start_state(boy):  
         with open('/home/zac/Desktop/uchicago/science_computing/final_project/game_start.state', 'rb') as game_state:
             boy.load_state(game_state)
+            
+            
+    @staticmethod
+    def _calc_grid_shape(k: int):
+        if k <= 0:
+            return (0, 0)
+        if k == 1:
+            return (1, 1)
+
+        # Start with the square root
+        root = int(math.sqrt(k))
+
+        # Try root × root
+        if root * root == k:
+            return (root, root)
+
+        # Otherwise grow columns first
+        rows = root
+        cols = root
+
+        while rows * cols < k:
+            cols += 1
+            if rows * cols >= k:
+                break
+            rows += 1
+
+        return (rows, cols)
         
     
     
     
 def main():
     
-    dna_str = "TTCCCAACCCCTAGACTTCCCCTGTACCTATGGTTCACTGGATGCCCCAAGGATACCTGATACTCATGTTAG"            
-    algo = GeneticAlgo('/home/zac/Desktop/uchicago/science_computing/final_project/pokemon_red.gb', n_cfgs = 10)
-    results = algo.find_best_cfg(dna_str, 25)
-    breakpoint()
-    best_cfg = algo.cfgs[results[0][0]]
-    frames = algo._record_run(best_cfg, dna_str, 25)
+    
+    def iter_fasta(path:str):
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('>'):
+                    continue
+                yield line.upper()
+                
+                
+    def load_prefix_bases(path: str, max_bases: int) -> str:
+        pieces = []
+        total = 0
+        for chunk in iter_fasta(path):
+            if total + len(chunk) >= max_bases:
+                # Only take what's needed from this chunk
+                need = max_bases - total
+                pieces.append(chunk[:need])
+                break
+            else:
+                pieces.append(chunk)
+                total += len(chunk)
+        return "".join(pieces)
+                    
+        
+    
+    dna_str = load_prefix_bases('/home/zac/Desktop/uchicago/science_computing/final_project/lung_fish_data/GCA_040581445.1_ASM4058144v1_genomic.fna', 400)    
+    n_steps = 300
+    
+    
+    algo = GeneticAlgo('/home/zac/Desktop/uchicago/science_computing/final_project/pokemon_red.gb', n_cfgs = 25_000)    
+    results = algo.find_best_cfg(dna_str, n_steps, 5)
+    algo.viz_best_n_cfgs(results, 12, dna_str, n_steps, './top_9_viz.gif')
+
     
     
     breakpoint()
