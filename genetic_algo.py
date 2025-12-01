@@ -4,15 +4,15 @@ import itertools as it
 import random
 from pyboy.utils import WindowEvent
 from tqdm import tqdm
-from PIL import Image
-import numpy as np
-import imageio.v2 as imageio
+from PIL import Image, ImageOps
 import math
-
+import pickle
 
 
 PLAYER_Y_ADDR = 0xD361
 PLAYER_X_ADDR = 0xD362
+MENU_MASK_ADDR = 0xCC29  
+BATTLE_TYPE_ADDR = 0xD057
 
 
 class GeneticAlgo(DNABoy):
@@ -44,18 +44,18 @@ class GeneticAlgo(DNABoy):
         frames = []
         boy = DNABoy(self.ROM_PATH, headless = headless)
         GeneticAlgo._load_start_state(boy)
-        ctrl_dict = self._make_cfg_dict(ctrl_cfg, boy)
         x0, y0 = self._get_location(boy)
         
         if record_frames:
-            frames = boy.execute_str(dna_seq, ctrl_dict, n_steps, True, False)
+            frames = boy.execute_str(dna_seq, ctrl_cfg, n_steps, True, False)
         else:
-            boy.execute_str(dna_seq, ctrl_dict, n_steps)
+            boy.execute_str(dna_seq, ctrl_cfg, n_steps)
         
         x1, y1 = self._get_location(boy)
-        fitness = (x1-x0, y1-y0)
         
-        return (ctrl_dict, fitness, frames)
+        fitness = self._calc_fitness(x0, y0, x1, y1)
+        
+        return (ctrl_cfg, fitness, frames)
     
     
     def viz_best_n_cfgs(self, results:list, n:int, dna_str:str, n_steps:int, out_path:str):
@@ -71,8 +71,9 @@ class GeneticAlgo(DNABoy):
                 while len(seq) < max_len:
                     seq.append(last)
 
-        # Image size (each cell)
-        cell_w, cell_h = all_frames[0][0].size
+        
+        sample_frame = self._add_border(all_frames[0][0])
+        cell_w, cell_h = sample_frame.size
 
         grid_frames = []
         for t in range(max_len):
@@ -81,9 +82,9 @@ class GeneticAlgo(DNABoy):
             for idx, seq in enumerate(all_frames):
                 r = idx // cols
                 c = idx % cols
-                frame = seq[t]
+                frame = self._add_border(seq[t])
                 grid_img.paste(frame, (c * cell_w, r * cell_h))
-
+            
             grid_frames.append(grid_img)
 
         # Save to GIF
@@ -95,7 +96,7 @@ class GeneticAlgo(DNABoy):
             loop=0
         )
         
-        
+    
     
     def _record_top_n_runs(self, n:int, results:list, dna_str:str, n_steps:int, headless = True):
         
@@ -123,6 +124,10 @@ class GeneticAlgo(DNABoy):
         _, _, frames = self.find_fitness(cfg, dna_str, n_steps, True, True)
 
         return frames
+    
+    @staticmethod
+    def _add_border(img, border_size=3, color=(255, 0, 0)):
+        return ImageOps.expand(img, border=border_size, fill=color)
             
                
     def _worker(self, args):        
@@ -130,22 +135,41 @@ class GeneticAlgo(DNABoy):
         
         boy = DNABoy(rom_path, headless = headless)
         GeneticAlgo._load_start_state(boy)
-        ctrl_dict = GeneticAlgo._make_cfg_dict(cfg, boy)
         x0, y0 = GeneticAlgo._get_location(boy)
-        boy.execute_str(dna_str, ctrl_dict, n_steps, False, False)
+        boy.execute_str(dna_str, cfg, n_steps, False, False)
         x1, y1 = GeneticAlgo._get_location(boy)
-        fitness = (x1 - x0, y1 - y0)
+        fitness = self._calc_fitness(x0, y0, x1, y1)
         
-        return idx, fitness
+        
+        
+        return idx, fitness, cfg
                                 
+    @staticmethod
+    def _calc_fitness(x0:int, y0:int, x1:int, y1:int, stuck_dist = 20 , stuck_penalty:int = -50):
+        
+        dx = x1 - x0
+        dy = y1 - y0
+        
+        dist = abs(dx) + abs(dy)
+        
+        north = -dy * 1.40
+        
+        
+        if dist < stuck_dist:
+            dist = dist - stuck_penalty
             
-    
+        fitness = dist + north
+        
+        return fitness
+            
+        
     @staticmethod
     def _get_location(boy):
         x = boy.memory[PLAYER_X_ADDR]
         y = boy.memory[PLAYER_Y_ADDR]
         
         return x,y
+    
     
     @staticmethod
     def _calc_ctrl_cfgs(n_configs = 300):
@@ -156,7 +180,7 @@ class GeneticAlgo(DNABoy):
             (WindowEvent.PRESS_ARROW_DOWN, WindowEvent.RELEASE_ARROW_DOWN),
             (WindowEvent.PRESS_BUTTON_A, WindowEvent.RELEASE_BUTTON_A),
             (WindowEvent.PRESS_BUTTON_B, WindowEvent.RELEASE_BUTTON_B),
-            (WindowEvent.PRESS_BUTTON_START, WindowEvent.RELEASE_BUTTON_START),            
+            #(WindowEvent.PRESS_BUTTON_START, WindowEvent.RELEASE_BUTTON_START),            
         ]
         
                 
@@ -183,7 +207,7 @@ class GeneticAlgo(DNABoy):
     
     @staticmethod
     def _load_start_state(boy):  
-        with open('/home/zac/Desktop/uchicago/science_computing/final_project/game_start.state', 'rb') as game_state:
+        with open('/home/zac/Desktop/uchicago/science_computing/final_project/algo_test.state', 'rb') as game_state:
             boy.load_state(game_state)
             
             
@@ -214,8 +238,6 @@ class GeneticAlgo(DNABoy):
         return (rows, cols)
         
     
-    
-    
 def main():
     
     
@@ -233,7 +255,6 @@ def main():
         total = 0
         for chunk in iter_fasta(path):
             if total + len(chunk) >= max_bases:
-                # Only take what's needed from this chunk
                 need = max_bases - total
                 pieces.append(chunk[:need])
                 break
@@ -243,18 +264,26 @@ def main():
         return "".join(pieces)
                     
         
+    n_steps = 500
+    n_cfgs = 300
+    n_threads = 8
+    n_viz = 16
     
-    dna_str = load_prefix_bases('/home/zac/Desktop/uchicago/science_computing/final_project/lung_fish_data/GCA_040581445.1_ASM4058144v1_genomic.fna', 400)    
-    n_steps = 300
+    ROM_PATH = '/home/zac/Desktop/uchicago/science_computing/final_project/pokemon_red.gb'
+    
+    dna_str = load_prefix_bases('/home/zac/Desktop/uchicago/science_computing/final_project/lung_fish_data/GCA_040581445.1_ASM4058144v1_genomic.fna', n_steps)    
     
     
-    algo = GeneticAlgo('/home/zac/Desktop/uchicago/science_computing/final_project/pokemon_red.gb', n_cfgs = 25_000)    
-    results = algo.find_best_cfg(dna_str, n_steps, 5)
-    algo.viz_best_n_cfgs(results, 12, dna_str, n_steps, './top_9_viz.gif')
-
+    algo = GeneticAlgo(ROM_PATH, n_cfgs = n_cfgs)    
     
+    results = algo.find_best_cfg(dna_str, n_steps, n_threads)
     
-    breakpoint()
+    #algo.viz_best_n_cfgs(results, n_viz, dna_str, n_steps, './top_16_viz.gif')
+    
+    best_cfg = results[0][2]
+        
+    with open('/home/zac/Desktop/uchicago/science_computing/final_project/best_cfg.pkl', 'wb') as f:
+        pickle.dump(best_cfg, f)
     
     
 
